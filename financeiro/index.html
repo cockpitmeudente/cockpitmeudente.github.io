@@ -146,6 +146,10 @@ input[type=date]{color-scheme:dark}
 .clsitem .nm{font-size:16px;font-weight:700}
 .prog{height:4px;background:#0a1a2f;border-radius:3px;overflow:hidden;margin:-6px 0 14px}.prog i{display:block;height:100%;background:var(--gold);transition:width .25s}
 .tag.pn{color:var(--gold2);border-color:#7a6438;margin-left:4px}
+.comprow{display:grid;grid-template-columns:64px 1fr auto;gap:12px;align-items:center;background:#0b1c31;border:1px solid #20395a;border-radius:12px;padding:10px 12px;margin-bottom:8px}
+.comprow img{width:64px;height:80px;object-fit:cover;border-radius:8px;background:#0a1a2f;border:1px solid #405876}
+.comprow .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+@media(max-width:640px){.comprow{grid-template-columns:56px 1fr}.comprow .acts{grid-column:1/-1;justify-content:flex-start}}
 .dupwarn{color:var(--amber);font-size:12.5px;grid-column:1/-1;margin:0}
 #dlgFoto menu,#dlgCls menu{position:sticky;bottom:-22px;background:#10233e;padding:10px 0 4px;margin-bottom:-4px;z-index:2}
 @media(max-width:1050px){.kpis{grid-template-columns:repeat(2,1fr)}.grid2,.grid3{grid-template-columns:1fr}}
@@ -302,9 +306,15 @@ input[type=date]{color-scheme:dark}
   <label class="wide">Observações<input name="notes"></label>
   <p class="dupwarn" id="fotoDup" hidden></p>
  </fieldset>
- <p class="help">A imagem vai só para a sua conta Claude ler os dados; ela não fica guardada no painel. Confira os valores antes de salvar.</p>
+ <p class="help" id="fotoHelp"></p>
  <menu class="wide"><button class="btn" type="button" data-close>Cancelar</button><button class="btn gold" type="submit" id="fotoSave" hidden>Salvar compra</button></menu>
 </form></dialog>
+
+<dialog class="dlg" id="dlgComps" style="max-width:760px"><h2>Comprovantes enviados</h2>
+ <p class="sub" id="compsSub" style="margin:-6px 0 10px"></p>
+ <div id="compsList"></div>
+ <menu style="display:flex;justify-content:flex-end;gap:8px;padding:0;margin:12px 0 0;flex-wrap:wrap"><button class="btn" type="button" data-close>Fechar</button><button class="btn gold" type="button" id="compsAll" hidden>Ler todos com o Claude</button></menu>
+</dialog>
 
 <dialog class="dlg" id="dlgCls"><h2>Classificar compras <span class="sub" id="clsCount"></span></h2>
  <div class="prog"><i id="clsProg"></i></div>
@@ -465,7 +475,7 @@ function snap(c){const docs=[...C[c].entries()].map(([id,d])=>({id,exists:true,d
 function emitir(c){const s=snap(c);subs[c].slice().forEach(([cb])=>{try{cb(s)}catch(e){console.error(e)}})}
 async function carregarTudo(){
  const todos=[];for(let off=0;;off+=1000){const rows=await rest(`fin_docs?select=colecao,id,data&order=colecao.asc,id.asc&limit=1000&offset=${off}`);todos.push(...rows);if(rows.length<1000)break}
- COLS.forEach(c=>C[c].clear());todos.forEach(r=>{if(C[r.colecao])C[r.colecao].set(r.id,r.data||{})});carregado=true;COLS.forEach(emitir)}
+ COLS.forEach(c=>C[c].clear());todos.forEach(r=>{if(C[r.colecao])C[r.colecao].set(r.id,r.data||{})});carregado=true;COLS.forEach(emitir);await compCarregar()}
 function marcarSync(ok){const el=$('#sync');if(!el)return;el.textContent=ok?'Atualizado · '+new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'Sem conexão · tentando de novo'}
 async function verificar(){
  if(!sess||!carregado||document.hidden)return;
@@ -477,6 +487,13 @@ const db={
   set:async d=>{await rest('fin_docs?on_conflict=colecao,id',{method:'POST',body:[{colecao:c,id,data:d}],prefer:'resolution=merge-duplicates,return=minimal'});if(C[c]){C[c].set(id,JSON.parse(JSON.stringify(d)));emitir(c)}},
   update:async d=>{await rpc('fin_juntar',{p_colecao:c,p_id:id,p_campos:d});if(C[c]){const cur={...(C[c].get(id)||{}),...JSON.parse(JSON.stringify(d))};Object.keys(d).forEach(k=>{if(d[k]&&d[k].__delete__)delete cur[k]});C[c].set(id,cur);emitir(c)}},
   delete:async()=>{await rest(q,{method:'DELETE',prefer:'return=minimal'});if(C[c]){C[c].delete(id);emitir(c)}}}}};
+// comprovantes enviados por foto (a imagem fica no banco; o Claude lê depois)
+const COMPS={lista:[]};const COMPCOLS='id,criado_em,enviado_por,card,empresa,unidade,valor,parcelas,data,obs,status,lancamento,erro';
+async function compCarregar(){try{COMPS.lista=await rest(`fin_comprovantes?select=${COMPCOLS}&status=in.(pendente,erro)&order=criado_em.asc`)||[]}catch(e){}try{window.__fpCompChanged&&window.__fpCompChanged()}catch(e){}}
+window.__fpComp={get lista(){return COMPS.lista},
+ enviar:async o=>{const b={...o};delete b.enviado_por;await rest('fin_comprovantes',{method:'POST',body:[b],prefer:'return=minimal'});await compCarregar()},
+ imagem:async id=>{const r=await rest(`fin_comprovantes?select=imagem&id=eq.${encodeURIComponent(id)}`);return r&&r[0]&&r[0].imagem},
+ marcar:async(id,status,lanc,erro)=>{await rest(`fin_comprovantes?id=eq.${encodeURIComponent(id)}`,{method:'PATCH',body:{status,lancamento:lanc||null,erro:erro?String(erro).slice(0,300):null},prefer:'return=minimal'});await compCarregar()}};
 window.claude={use:async n=>{if(n==='db')return dbReady;if(n==='user'){await dbReady;return{can:async()=>!!eu&&eu.ativo&&eu.papel!=='leitor'}}return null}};
 
 // ---------- tela de entrada ----------
@@ -566,6 +583,7 @@ $('#fpNovoF').onsubmit=async ev=>{ev.preventDefault();const f=ev.target,b=f.quer
 const ROT={empresa:'quem paga',unidade:'unidade',amount:'valor',pago:'paga',pagoEm:'paga em',status:'situação',month:'mês',desc:'descrição',notes:'obs.',card:'cartão',parcela:'parcela',limit:'limite',closing:'fecha',due:'vence',ok:'reembolsado',name:'nome',data:'data'};
 const val=v=>v==null||v===''?'—':typeof v==='boolean'?(v?'sim':'não'):typeof v==='number'?v.toLocaleString('pt-BR',{maximumFractionDigits:2}):String(v).slice(0,40);
 function descrever(r){
+ if(r.colecao==='comprovantes'){const d=r.depois||{};const st={pendente:'aguardando leitura',lido:'lido e lançado',erro:'para conferir',descartado:'descartado',lancado:'lançado na hora'}[d.status]||d.status;return (r.acao==='enviou'?'Enviou comprovante':'Comprovante')+' · cartão '+esc(d.card||'')+' · '+esc(d.empresa||'')+(d.valor?' · '+esc(val(d.valor)):'')+' · '+esc(st||'')}
  if(r.colecao==='acessos'){const d=r.depois||{};const p=[];if(d.criou)p.push('criou acesso ('+(PAPEL[d.criou]||d.criou)+')');if(d.nova_senha)p.push('gerou nova senha');if(d.excluiu)p.push('excluiu acesso');if(d.papel)p.push('mudou para '+(PAPEL[d.papel]||d.papel));if(d.ativo===false)p.push('bloqueou');if(d.ativo===true)p.push('liberou');return 'Acesso de <b>'+esc(r.doc)+'</b>: '+esc(p.join(', ')||'alterou')}
  const o=r.depois||r.antes||{};const nome=o.desc||o.name||(o.card?'fatura '+o.card:'')||r.doc;const mes=o.month?' ('+o.month+')':'';
  const tipo={lancamentos:'compra',faturas:'fatura',cartoes:'cartão',reembolsos:'reembolso'}[r.colecao]||r.colecao;
@@ -840,6 +858,7 @@ function renderCal(SEL){
 function renderPend(m){
  const items=[];
  const cls=S.lan.filter(l=>empOf(l)==='A classificar'&&l.month>=CUR);
+ const cpa=compsAbertos();if(cpa.length)items.push({ic:'w',s:cpa.length,t:`${cpa.length} comprovante(s) enviado(s) aguardando lançamento`,d:podeLer()&&canWrite?'Toque para o Claude ler e lançar':'O Claude lê quando o Fernando abre o painel no Claude',v:'',go:()=>{openComps();return'stay'}});
  if(cls.length){const nC=new Set(cls.map(l=>l.compra||l.id)).size;items.push({ic:'w',s:'?',t:`${nC} compra(s) sem empresa definida`,d:canWrite?'Toque para classificar uma a uma, com um toque por compra':'Diga de quem é cada uma para separar pessoal e empresas',v:fmt(cls.reduce((a,l)=>a+num(l.amount),0)),go:()=>{if(canWrite){openCls();return'stay'}tab='lanc';allMonthsLan=true;$('#fGroup').value='A classificar';$('#fUnit').value='';$('#fCard').value='';}})}
  const fm=S.fat.filter(f=>f.month===m&&num(f.amount)>0);
  fm.forEach(f=>{const d=S.lan.filter(l=>l.month===m&&l.card===f.card).reduce((a,l)=>a+num(l.amount),0);const diff=num(f.amount)-d;const p=Math.round(d/num(f.amount)*100);
@@ -955,7 +974,7 @@ async function setPago(id,v,el){el.disabled=true;try{await write('faturas/'+id,v
 async function setReemb(key,v,el){const[e,m]=key.split('|');el.disabled=true;try{await write('reembolsos/'+slug(e)+'-'+m,{empresa:e,month:m,ok:!!v,em:new Date().toISOString()},'set');toast(v?e+': reembolso registrado':'Reembolso desmarcado')}catch(err){el.checked=!v}finally{el.disabled=false}}
 
 function closeOn(d){d.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>d.close())}
-['#dlgFat','#dlgLan','#dlgCard','#dlgFoto','#dlgCls','#dlgTxt'].forEach(s=>closeOn($(s)));
+['#dlgFat','#dlgLan','#dlgCard','#dlgFoto','#dlgCls','#dlgTxt','#dlgComps'].forEach(s=>closeOn($(s)));
 
 let editFat=null,fatPreset=false;
 function fatDatesHelp(){const f=$('#fFat');const c=card(f.card.value);if(!c||!f.month.value){$('#fatDates').textContent='';return}const d=datesFor(c,f.month.value);$('#fatDates').textContent='Fecha em '+dBR(d.close)+' e vence em '+dBR(d.due)+'.'}
@@ -1080,7 +1099,9 @@ $('#clsSave').onclick=async()=>{if(!clsEmp){toast('Toque em quem paga');return}c
 // ---------- comprovante por foto (lido pela sua conta Claude) ----------
 let fotoCtl=null,fotoURL='',fotoImg=null,fotoEmp='',fotoMonthTouched=false,fotoDupArm='';
 const FF=()=>$('#fFoto');
-function photoUI(){const on=!!(sample&&imgCaps&&canWrite&&S.cards.length);$('#btnFoto').hidden=!on;$('#fabFoto').hidden=!on}
+const COMP=()=>window.__fpComp||null;const podeLer=()=>!!(sample&&imgCaps);
+let fotoPreset=null,fotoModo='ler';
+function photoUI(){const on=!!(canWrite&&S.cards.length&&(podeLer()||COMP()));$('#btnFoto').hidden=!on;$('#fabFoto').hidden=!on}
 $('#btnFoto').onclick=$('#fabFoto').onclick=()=>{const i=$('#fotoIn');i.value='';i.click()};
 $('#fotoIn').onchange=e=>{const f=e.target.files&&e.target.files[0];if(f)startFoto(f)};
 function fotoState(kind,msg,info){const s=$('#fotoStatus');s.className='reading'+(kind==='ok'?' okmsg':kind==='err'?' errmsg':'');
@@ -1106,13 +1127,19 @@ Regras:
 - fornecedor = nome curto do estabelecimento como sairia na fatura (ex.: "Mercado Livre", "Leo Madeiras").
 - tipo "fatura" se a imagem for a fatura ou o resumo do cartão: valor_total = total a pagar e mes_fatura = mês do vencimento.
 - Se não der para ler, legivel = false e explique em observacao.`}
-function startFoto(file){
- const f=FF();f.reset();fotoEmp='';fotoMonthTouched=false;fotoDupArm='';fotoImg=file;$('#fotoSave').textContent='Salvar compra';
+function startFoto(file,preset){
+ const f=FF();f.reset();fotoPreset=preset||null;fotoModo=podeLer()?'ler':'envio';fotoEmp=(preset&&preset.empresa)||'';fotoMonthTouched=false;fotoDupArm='';fotoImg=file;$('#fotoSave').textContent='Salvar compra';
  f.card.innerHTML='<option value="">Escolha o cartão</option>'+S.cards.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} •••• ${esc(c.id)}</option>`).join('');
+ if(preset){f.card.value=preset.card||'';f.unidade.value=preset.unidade||'';if(preset.parcelas)f.n.value=preset.parcelas;if(preset.data)f.data.value=preset.data;if(preset.valor)f.amount.value=preset.valor;if(preset.obs)f.notes.value=preset.obs}
  ['#fotoFields','#fotoSave','#fotoFat','#fotoAsCompra','#fotoRetry','#fotoDup'].forEach(s=>$(s).hidden=true);$('#fotoSug').textContent='';$('#fotoUnits').innerHTML='';$('#fotoComp').textContent='';
  try{if(fotoURL)URL.revokeObjectURL(fotoURL);fotoURL=URL.createObjectURL(file);$('#fotoPrev').src=fotoURL;$('#fotoPrev').hidden=false}catch(e){$('#fotoPrev').hidden=true}
  if(!$('#dlgFoto').open)$('#dlgFoto').showModal();
- readFoto()}
+ $('#fotoHelp').textContent=fotoModo==='envio'?'A foto fica guardada no banco do painel, visível só para quem tem acesso, para o Claude ler o valor e lançar a compra.':(fotoPreset?'Esta foto foi enviada pelo painel e fica guardada junto do comprovante. Confira os valores antes de salvar.':'A imagem vai só para a sua conta Claude ler os dados; ela não fica guardada no painel. Confira os valores antes de salvar.');
+ if(fotoModo==='ler')readFoto();else fotoEnvio()}
+function fotoEnvio(){
+ fotoState('ok',fotoPreset?'Comprovante enviado por '+(fotoPreset.por||'alguém'):'Foto anexada','Escolha o cartão e toque em quem paga. O valor é opcional: deixando em branco, o Claude lê o comprovante e lança a compra.');
+ $('#fotoStop').hidden=true;showFotoFields();fotoComp()}
+const rotuloSalvar=()=>fotoModo==='envio'&&!num(FF().amount.value)?'Enviar comprovante':'Salvar compra';
 async function readFoto(){
  if(!sample){fotoManual('Leitura automática indisponível agora. Preencha abaixo.');return}
  fotoState('read','Lendo o comprovante…','Costuma levar de 10 a 60 segundos. Na primeira vez, o Claude pede sua autorização.');$('#fotoRetry').hidden=true;
@@ -1138,7 +1165,7 @@ function fotoFill(r){const f=FF();const tipo=sv(r.tipo).toLowerCase();
  let cid='';const fin=String(r.final_cartao||'').replace(/\D/g,'').slice(-4);
  if(fin&&card(fin))cid=fin;
  else{const b=sv(r.banco_ou_cartao).toLowerCase();if(b){const stop=['cartao','cartão','credito','crédito','visa','mastercard','master','banco','debito','débito'];const ws=b.split(/[^a-z0-9à-ú]+/i).filter(w=>w.length>=4&&!stop.includes(w));const one=new Set();ws.forEach(w=>{const h=S.cards.filter(c=>c.name.toLowerCase().includes(w));if(h.length===1)one.add(h[0].id)});if(one.size===1)cid=[...one][0]}}
- f.card.value=cid;
+ f.card.value=(fotoPreset&&fotoPreset.card)||cid;
  f.data.value=/^\d{4}-\d{2}-\d{2}$/.test(sv(r.data))?sv(r.data):'';
  f.desc.value=sv(r.fornecedor).slice(0,80);
  const n=Math.max(1,Math.min(24,parseInt(r.parcelas)||1));f.n.value=n;
@@ -1151,7 +1178,7 @@ function fotoFill(r){const f=FF();const tipo=sv(r.tipo).toLowerCase();
   $('#fotoAsCompra').hidden=false;return}
  if(r.legivel===false||tipo==='outro')return fotoManual((sv(r.observacao)||'Não deu para ler bem a imagem.')+' Confira e preencha abaixo.',true);
  const miss=[!cid&&'cartão',!f.desc.value&&'fornecedor',!f.amount.value&&'valor',!f.data.value&&'data'].filter(Boolean);
- fotoState('ok','Comprovante lido',(miss.length?'Não apareceu: '+miss.join(', ')+'. ':'')+'Confira os dados e toque em quem paga.');
+ const miss2=miss.filter(x=>!(x==='cartão'&&f.card.value));fotoState('ok','Comprovante lido',(miss2.length?'Não apareceu: '+miss2.join(', ')+'. ':'')+(fotoEmp?'Confira os dados e toque em Salvar.':'Confira os dados e toque em quem paga.'));
  showFotoFields();fotoComp()}
 $('#fotoAsCompra').onclick=()=>{$('#fotoAsCompra').hidden=true;$('#fotoFat').hidden=true;showFotoFields();fotoComp()};
 function showFotoFields(){$('#fotoFields').hidden=false;$('#fotoSave').hidden=false;fotoChips()}
@@ -1165,25 +1192,72 @@ function fotoComp(){const f=FF();const c=card(f.card.value);const d=parseISO(f.d
  if(c&&f.month.value){const x=datesFor(c,f.month.value);$('#fotoComp').textContent='Fecha em '+dBR(x.close)+' e vence em '+dBR(x.due)+'.'+(n>1?' Última parcela na fatura de '+mLabel(shiftM(f.month.value,n-1))+'.':'')}
  else $('#fotoComp').textContent='Escolha o cartão para calcular a fatura certa.';
  checkDup()}
-function checkDup(){const f=FF();const a=num(f.amount.value);const w=$('#fotoDup');fotoDupArm='';$('#fotoSave').textContent='Salvar compra';
+function checkDup(){const f=FF();const a=num(f.amount.value);const w=$('#fotoDup');fotoDupArm='';$('#fotoSave').textContent=rotuloSalvar();
  if(!f.card.value||!a||!f.month.value){w.hidden=true;return}
  const d=S.lan.find(l=>l.card===f.card.value&&l.month===f.month.value&&Math.abs(num(l.amount)-a)<0.015);
  if(d){w.hidden=false;w.textContent=`Atenção: já existe "${d.desc}" de ${fmt(d.amount)} na fatura de ${mLabel(d.month)} deste cartão (${empLabel(d)}). Pode ser a mesma compra.`}else w.hidden=true}
 FF().card.addEventListener('change',fotoComp);FF().data.addEventListener('change',fotoComp);FF().n.addEventListener('input',fotoComp);
 FF().month.addEventListener('change',()=>{fotoMonthTouched=true;fotoComp()});FF().amount.addEventListener('input',checkDup);FF().desc.addEventListener('change',fotoChips);
-FF().onsubmit=async e=>{e.preventDefault();const f=FF();
+async function comprimir(file){
+ // guarda a foto leve (até ~1400 px, JPEG) para o Claude ler depois
+ const ler=b=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(',')[1]||'');r.onerror=rej;r.readAsDataURL(b)});
+ try{const bmp=await createImageBitmap(file);for(const [lado,q] of [[1400,.72],[1100,.6],[900,.5]]){const sc=Math.min(1,lado/Math.max(bmp.width,bmp.height));const c=document.createElement('canvas');c.width=Math.round(bmp.width*sc);c.height=Math.round(bmp.height*sc);c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);const bl=await new Promise(r=>c.toBlob(r,'image/jpeg',q));const t=bl&&await ler(bl);if(t&&t.length<1400000)return t}}catch(e){}
+ const t=await ler(file);if(t.length>=1400000)throw new Error('foto grande demais');return t}
+const b64Blob=t=>{const bin=atob(t);const u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return new Blob([u],{type:'image/jpeg'})};
+async function gravarCompra(o){
+ const n=Math.max(1,Math.min(24,parseInt(o.n)||1));
+ const base={card:o.card,desc:o.desc,empresa:o.empresa,unidade:o.empresa==='Pessoal'?'':(o.unidade||''),parcela:n>1?n+'X':'',data:o.data||'',status:o.empresa==='A classificar'?'Pendente':'Identificado'};
+ const k=base.card+'-'+slug(base.desc)+'-'+Date.now().toString(36);
+ for(let i=0;i<n;i++){const mm=shiftM(o.month,i);await write('lancamentos/'+k+'-'+mm,{...base,id:k+'-'+mm,compra:k,month:mm,amount:o.amount,source:o.source||'Comprovante (foto)',notes:[n>1?`Parcela ${i+1}/${n}.`:'',o.notes||''].filter(Boolean).join(' ')},'set')}
+ return k}
+FF().onsubmit=async e=>{e.preventDefault();const f=FF();const comp=COMP();
  if(!f.card.value){toast('Escolha o cartão');f.card.focus();return}
- if(!f.desc.value.trim()){toast('Informe o fornecedor');f.desc.focus();return}
- const a=Math.round(num(f.amount.value)*100)/100;if(!a){toast('Informe o valor da parcela');f.amount.focus();return}
- if(!/^\d{4}-\d{2}$/.test(f.month.value)){toast('Informe a fatura');return}
  if(!fotoEmp){toast('Toque em quem paga');$('#fotoEmps').scrollIntoView({block:'center',behavior:'smooth'});return}
- const btn=$('#fotoSave');if(!$('#fotoDup').hidden&&!fotoDupArm){fotoDupArm='1';btn.textContent='Salvar mesmo assim';return}
- const n=Math.max(1,Math.min(24,parseInt(f.n.value)||1));
- const base={card:f.card.value,desc:f.desc.value.trim(),empresa:fotoEmp,unidade:fotoEmp==='Pessoal'?'':f.unidade.value.trim(),parcela:n>1?n+'X':'',data:f.data.value,status:fotoEmp==='A classificar'?'Pendente':'Identificado'};
- const k=base.card+'-'+slug(base.desc)+'-'+Date.now().toString(36);btn.disabled=true;
- try{for(let i=0;i<n;i++){const mm=shiftM(f.month.value,i);await write('lancamentos/'+k+'-'+mm,{...base,id:k+'-'+mm,compra:k,month:mm,amount:a,source:'Comprovante (foto)',notes:[n>1?`Parcela ${i+1}/${n}.`:'',f.notes.value.trim()].filter(Boolean).join(' ')},'set')}
+ const a=Math.round(num(f.amount.value)*100)/100;const n=Math.max(1,Math.min(24,parseInt(f.n.value)||1));const btn=$('#fotoSave');
+ if(!a&&fotoModo==='envio'&&comp){
+  if(fotoPreset&&fotoPreset.compId){$('#dlgFoto').close();toast('Ele continua aguardando a leitura do Claude');return}
+  btn.disabled=true;btn.textContent='Enviando…';
+  try{const img=await comprimir(fotoImg);await comp.enviar({card:f.card.value,empresa:fotoEmp,unidade:fotoEmp==='Pessoal'?'':f.unidade.value.trim(),parcelas:n,data:f.data.value||null,obs:f.notes.value.trim().slice(0,300)||null,imagem:img});
+   $('#dlgFoto').close();toast('Comprovante enviado · o Claude lê e lança a compra')}
+  catch(err){toast('Não foi possível enviar: '+((err&&err.message)||'tente de novo'))}finally{btn.disabled=false;btn.textContent=rotuloSalvar()}
+  return}
+ if(!a){toast('Informe o valor da parcela');f.amount.focus();return}
+ if(!f.desc.value.trim()){if(fotoModo==='envio')f.desc.value='Compra (comprovante)';else{toast('Informe o fornecedor');f.desc.focus();return}}
+ if(!/^\d{4}-\d{2}$/.test(f.month.value)){toast('Informe a fatura');return}
+ if(!$('#fotoDup').hidden&&!fotoDupArm){fotoDupArm='1';btn.textContent='Salvar mesmo assim';return}
+ btn.disabled=true;
+ try{const k=await gravarCompra({card:f.card.value,desc:f.desc.value.trim(),empresa:fotoEmp,unidade:f.unidade.value.trim(),n,data:f.data.value,month:f.month.value,amount:a,notes:f.notes.value.trim(),source:fotoPreset&&fotoPreset.por?'Comprovante (foto) · enviado por '+fotoPreset.por:'Comprovante (foto)'});
+  if(comp){try{if(fotoPreset&&fotoPreset.compId)await comp.marcar(fotoPreset.compId,'lido',k);else if(fotoModo==='envio')await comp.enviar({card:f.card.value,empresa:fotoEmp,unidade:f.unidade.value.trim()||null,parcelas:n,valor:a,data:f.data.value||null,obs:null,imagem:await comprimir(fotoImg),status:'lancado',lancamento:k})}catch(e2){}}
   $('#dlgFoto').close();toast((n>1?n+' parcelas salvas':'Compra salva')+' · '+(fotoEmp==='A classificar'?'a classificar':fotoEmp))}
  catch(err){}finally{btn.disabled=false}};
+
+// ---------- fila de comprovantes enviados ----------
+const compsAbertos=()=>((COMP()&&COMP().lista)||[]).filter(c=>c.status==='pendente'||c.status==='erro');
+window.__fpCompChanged=()=>{try{if(mounted())render();if($('#dlgComps').open)renderComps()}catch(e){}};
+function openComps(){renderComps();$('#dlgComps').showModal()}
+function renderComps(){const L=compsAbertos();const B=$('#compsList');
+ $('#compsSub').textContent=L.length?(podeLer()?'Toque em "Abrir" para o Claude ler e você conferir, ou em "Ler todos" para lançar de uma vez.':'O Claude lê estes comprovantes quando o Fernando abre o painel no Claude. Se quiser, abra e preencha o valor à mão.'):'Nenhum comprovante aguardando.';
+ $('#compsAll').hidden=!(podeLer()&&canWrite&&L.some(c=>c.status==='pendente'));
+ B.innerHTML=L.map((c,i)=>`<div class="comprow"><img data-i="${i}" alt="">
+  <div><b>${esc(cardName(c.card))} •••• ${esc(c.card)}</b> · ${esc(c.empresa)}${c.unidade?' · '+esc(c.unidade):''}${c.parcelas>1?' · '+c.parcelas+'X':''}
+  <div class="sub">Enviado por ${esc(c.enviado_por||'—')} em ${esc(new Date(c.criado_em).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}))}${c.status==='erro'?` · <span style="color:var(--amber)">${esc(c.erro||'não deu para ler')}</span>`:''}</div></div>
+  <div class="acts">${canWrite?`<button class="btn mini gold" data-a="abrir" data-i="${i}">Abrir</button><button class="btn mini" data-a="desc" data-i="${i}">Descartar</button>`:''}</div></div>`).join('');
+ B.querySelectorAll('img[data-i]').forEach(im=>{const c=L[+im.dataset.i];COMP().imagem(c.id).then(t=>{if(t)im.src='data:image/jpeg;base64,'+t}).catch(()=>{})});
+ B.querySelectorAll('[data-a]').forEach(b=>{const c=L[+b.dataset.i];
+  if(b.dataset.a==='abrir')b.onclick=async()=>{b.disabled=true;try{const t=await COMP().imagem(c.id);$('#dlgComps').close();startFoto(b64Blob(t),{compId:c.id,card:c.card,empresa:c.empresa,unidade:c.unidade,parcelas:c.parcelas,data:c.data,obs:c.obs,valor:c.valor,por:c.enviado_por})}catch(e){toast('Não foi possível abrir a foto');b.disabled=false}};
+  if(b.dataset.a==='desc')b.onclick=async()=>{if(b.dataset.arm!=='1'){b.dataset.arm='1';b.textContent='Confirmar';return}try{await COMP().marcar(c.id,'descartado')}catch(e){toast('Não foi possível descartar')}}})}
+$('#compsAll').onclick=async()=>{const btn=$('#compsAll');const L=compsAbertos().filter(c=>c.status==='pendente');if(!L.length)return;btn.disabled=true;let ok=0,falha=0;
+ for(let i=0;i<L.length;i++){const c=L[i];btn.textContent=`Lendo ${i+1} de ${L.length}…`;
+  try{const t=await COMP().imagem(c.id);let img=b64Blob(t);try{img=await prepImg(img)}catch(e){}
+   const r=await sample.json(fotoPrompt()+`\n\nO cartão já foi informado por quem enviou: ${cardName(c.card)} (final ${c.card}).`,{images:[img],modelTier:'default'});
+   const n=Math.max(1,Math.min(24,c.parcelas>1?c.parcelas:(parseInt(r&&r.parcelas)||1)));let vp=c.valor?num(c.valor):nv(r&&r.valor_parcela);const vt=nv(r&&r.valor_total);if(vp==null&&vt!=null)vp=Math.round(vt/n*100)/100;
+   if(!r||r.legivel===false||sv(r.tipo).toLowerCase()==='fatura'||!vp){await COMP().marcar(c.id,'erro',null,(r&&sv(r.observacao))||'não deu para ler o valor; abra e preencha');falha++;continue}
+   const dt=/^\d{4}-\d{2}-\d{2}$/.test(c.data||'')?c.data:(/^\d{4}-\d{2}-\d{2}$/.test(sv(r.data))?sv(r.data):'');const cc=card(c.card);const month=compFor(cc,parseISO(dt)||new Date(c.criado_em))||CUR;
+   if(S.lan.some(l=>l.card===c.card&&l.month===month&&Math.abs(num(l.amount)-vp)<0.015)){await COMP().marcar(c.id,'erro',null,'parece já lançada (mesmo valor e fatura); abra e confira');falha++;continue}
+   const k=await gravarCompra({card:c.card,desc:sv(r.fornecedor).slice(0,80)||'Compra (comprovante)',empresa:c.empresa,unidade:c.unidade,n,data:dt,month,amount:Math.round(vp*100)/100,notes:c.obs||'',source:'Comprovante (foto) · enviado por '+(c.enviado_por||'—')});
+   await COMP().marcar(c.id,'lido',k);ok++}
+  catch(e){const cd=e&&e.code;if(['not_granted','sampling_disabled','rate_limited','session_expired'].includes(cd)){toast(cd==='rate_limited'?'Limite de uso do Claude atingido; tente mais tarde':'Leitura do Claude indisponível agora');break}falha++;try{await COMP().marcar(c.id,'erro',null,'não deu para ler; abra e preencha')}catch(e2){}}}
+ btn.disabled=false;btn.textContent='Ler todos com o Claude';toast(`${ok} lançado(s)`+(falha?` · ${falha} para conferir`:''));renderComps()};
 
 // ---------- conexão com o banco ----------
 let timer;

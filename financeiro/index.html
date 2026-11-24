@@ -491,7 +491,9 @@ const db={
 const COMPS={lista:[]};const COMPCOLS='id,criado_em,enviado_por,card,empresa,unidade,valor,parcelas,data,obs,status,lancamento,erro';
 async function compCarregar(){try{COMPS.lista=await rest(`fin_comprovantes?select=${COMPCOLS}&status=in.(pendente,erro)&order=criado_em.asc`)||[]}catch(e){}try{window.__fpCompChanged&&window.__fpCompChanged()}catch(e){}}
 window.__fpComp={get lista(){return COMPS.lista},
- enviar:async o=>{const b={...o};delete b.enviado_por;await rest('fin_comprovantes',{method:'POST',body:[b],prefer:'return=minimal'});await compCarregar()},
+ enviar:async o=>{const b={...o};delete b.enviado_por;const ins=await rest('fin_comprovantes?select=id',{method:'POST',body:[b],prefer:'return=representation'});const id=ins&&ins[0]&&ins[0].id;let res=null;
+  if(id&&b.status!=='lancado'){try{const t=await token();const r=await fetch(CFG.url+'/functions/v1/fin-ler-comprovante',{method:'POST',headers:{apikey:CFG.key,Authorization:'Bearer '+t,'Content-Type':'application/json'},body:JSON.stringify({id})});res=await r.json().catch(()=>null)}catch(e){}}
+  if(res&&res.lancado){versao=null;await carregarTudo()}else await compCarregar();return res},
  imagem:async id=>{const r=await rest(`fin_comprovantes?select=imagem&id=eq.${encodeURIComponent(id)}`);return r&&r[0]&&r[0].imagem},
  marcar:async(id,status,lanc,erro)=>{await rest(`fin_comprovantes?id=eq.${encodeURIComponent(id)}`,{method:'PATCH',body:{status,lancamento:lanc||null,erro:erro?String(erro).slice(0,300):null},prefer:'return=minimal'});await compCarregar()}};
 window.claude={use:async n=>{if(n==='db')return dbReady;if(n==='user'){await dbReady;return{can:async()=>!!eu&&eu.ativo&&eu.papel!=='leitor'}}return null}};
@@ -1216,9 +1218,10 @@ FF().onsubmit=async e=>{e.preventDefault();const f=FF();const comp=COMP();
  const a=Math.round(num(f.amount.value)*100)/100;const n=Math.max(1,Math.min(24,parseInt(f.n.value)||1));const btn=$('#fotoSave');
  if(!a&&fotoModo==='envio'&&comp){
   if(fotoPreset&&fotoPreset.compId){$('#dlgFoto').close();toast('Ele continua aguardando a leitura do Claude');return}
-  btn.disabled=true;btn.textContent='Enviando…';
-  try{const img=await comprimir(fotoImg);await comp.enviar({card:f.card.value,empresa:fotoEmp,unidade:fotoEmp==='Pessoal'?'':f.unidade.value.trim(),parcelas:n,data:f.data.value||null,obs:f.notes.value.trim().slice(0,300)||null,imagem:img});
-   $('#dlgFoto').close();toast('Comprovante enviado · o Claude lê e lança a compra')}
+  btn.disabled=true;btn.textContent='Enviando e lendo…';fotoState('read','Enviando e lendo o comprovante…','Costuma levar de 5 a 20 segundos.');
+  try{const img=await comprimir(fotoImg);const r=await comp.enviar({card:f.card.value,empresa:fotoEmp,unidade:fotoEmp==='Pessoal'?'':f.unidade.value.trim(),parcelas:n,data:f.data.value||null,obs:f.notes.value.trim().slice(0,300)||null,imagem:img});
+   $('#dlgFoto').close();
+   toast(r&&r.lancado?`Lido e lançado: ${r.desc} · ${fmt(r.valor)}${r.parcelas>1?' em '+r.parcelas+'x':''} · fatura de ${mLabel(r.mes)}`:r&&r.lancado===false?'Enviado · ficou para conferir: '+(r.motivo||''):'Comprovante enviado · o Claude lê e lança a compra')}
   catch(err){toast('Não foi possível enviar: '+((err&&err.message)||'tente de novo'))}finally{btn.disabled=false;btn.textContent=rotuloSalvar()}
   return}
  if(!a){toast('Informe o valor da parcela');f.amount.focus();return}
